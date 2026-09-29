@@ -107,7 +107,7 @@ jobs:
       # 7. Terraform Init
       # =========================================================
       - name: Terraform Init
-        working-directory: abbysac/drift-notification
+        working-directory: terraform
         run: |
           terraform init -input=false
 
@@ -116,7 +116,7 @@ jobs:
       # =========================================================
       - name: Terraform Plan
         id: drift
-        working-directory: abbysac/drift-notification
+        working-directory: terraform
         shell: bash
         run: |
           set +e
