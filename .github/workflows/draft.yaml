@@ -70,11 +70,12 @@ jobs:
       # 5. Configure AWS using GitHub OIDC
       # =====================================================
 
-      - name: Show GitHub OIDC information
+      - name: Show OIDC subject information
         run: |
             echo "Repository: $GITHUB_REPOSITORY"
+            echo "Repository ID: ${{ github.event.repository.id }}"
+            echo "Repository Owner ID: ${{ github.repository_owner_id }}"
             echo "Ref: $GITHUB_REF"
-            echo "Branch: $GITHUB_REF_NAME"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
