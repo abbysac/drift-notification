@@ -402,7 +402,7 @@ jobs:
           print(f"Plan size: {len(plan)} characters")
 
           print("SES request written to /tmp/ses-request.json successfully.")
-
+          PY
 
       # =====================================================
       # 12. Send SES email
