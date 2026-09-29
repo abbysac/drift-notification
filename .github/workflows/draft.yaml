@@ -65,7 +65,7 @@ jobs:
       # 6. Initialize Terraform
       # ---------------------------------------------------------
       - name: Terraform Init
-        working-directory: terraform
+        working-directory: abbysac/drift-notification
         run: |
           terraform init -input=false
 
