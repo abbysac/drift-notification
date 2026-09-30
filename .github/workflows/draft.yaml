@@ -24,13 +24,6 @@ jobs:
 
       # =========================================================
       # 2. Checkout infrastructure repository
-      #
-      # This repository contains:
-      #   - Terraform configuration
-      #   - terraform.tfstate
-      #
-      # The entire repository is placed under:
-      #   ./infrastructure
       # =========================================================
       - name: Checkout infrastructure repository
         uses: actions/checkout@v4
@@ -40,52 +33,50 @@ jobs:
           path: infrastructure
 
       # =========================================================
-      # 3. Show infrastructure repository structure
+      # 3. Find Terraform configuration and state
       # =========================================================
-      - name: Verify infrastructure files
+      - name: Locate Terraform files and state
         run: |
           echo "=========================================="
           echo "INFRASTRUCTURE REPOSITORY"
           echo "=========================================="
 
           echo ""
-          echo "Infrastructure repository:"
-          ls -la "$GITHUB_WORKSPACE/infrastructure"
+          echo "Repository contents:"
+          find "$GITHUB_WORKSPACE/infrastructure" \
+            -maxdepth 3 \
+            -type f \
+            -print
 
           echo ""
-          echo "Terraform directory:"
-          ls -la "$GITHUB_WORKSPACE/infrastructure/terraform"
-
-      # =========================================================
-      # 4. Verify Terraform state file
-      # =========================================================
-      - name: Verify Terraform state
-        run: |
           echo "=========================================="
-          echo "VERIFY TERRAFORM STATE"
+          echo "SEARCHING FOR TERRAFORM STATE"
           echo "=========================================="
 
-          STATE_FILE="$GITHUB_WORKSPACE/infrastructure/terraform/terraform.tfstate"
+          STATE_COUNT=$(find "$GITHUB_WORKSPACE/infrastructure" \
+            -name "terraform.tfstate" \
+            -type f | wc -l)
 
-          if [ -f "$STATE_FILE" ]; then
+          echo "State files found: $STATE_COUNT"
+
+          if [ "$STATE_COUNT" -eq 0 ]; then
             echo ""
-            echo "terraform.tfstate FOUND"
+            echo "ERROR: No terraform.tfstate file was found."
             echo ""
-            ls -lh "$STATE_FILE"
-          else
-            echo ""
-            echo "ERROR: terraform.tfstate NOT FOUND"
-            echo ""
-            echo "Expected location:"
-            echo "$STATE_FILE"
-            echo ""
-            echo "Files under infrastructure/terraform:"
-            find "$GITHUB_WORKSPACE/infrastructure/terraform" -maxdepth 2 -type f -print
+            echo "This means the state file is not present in the"
+            echo "checked-out infrastructure repository."
             exit 1
           fi
 
+          echo ""
+          echo "State file(s) found:"
+          find "$GITHUB_WORKSPACE/infrastructure" \
+            -name "terraform.tfstate" \
+            -type f \
+            -print
+
       # =========================================================
-      # 5. Setup Terraform
+      # 4. Setup Terraform
       # =========================================================
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -93,7 +84,7 @@ jobs:
           terraform_wrapper: false
 
       # =========================================================
-      # 6. Configure AWS credentials
+      # 5. Configure AWS credentials
       # =========================================================
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -102,7 +93,7 @@ jobs:
           aws-region: us-east-1
 
       # =========================================================
-      # 7. Verify AWS credentials
+      # 6. Verify AWS credentials
       # =========================================================
       - name: Verify AWS identity
         run: |
@@ -111,6 +102,26 @@ jobs:
           echo "=========================================="
 
           aws sts get-caller-identity
+
+      # =========================================================
+      # 7. Verify Terraform directory
+      # =========================================================
+      - name: Verify Terraform directory
+        run: |
+          echo "=========================================="
+          echo "TERRAFORM DIRECTORY"
+          echo "=========================================="
+
+          echo ""
+          echo "Contents of infrastructure/terraform:"
+          ls -la "$GITHUB_WORKSPACE/infrastructure/terraform"
+
+          echo ""
+          echo "Terraform files:"
+          find "$GITHUB_WORKSPACE/infrastructure/terraform" \
+            -maxdepth 2 \
+            -type f \
+            -print
 
       # =========================================================
       # 8. Terraform Init
@@ -122,10 +133,46 @@ jobs:
           echo "TERRAFORM INIT"
           echo "=========================================="
 
-          terraform init
+          terraform init -input=false
 
       # =========================================================
-      # 9. Display Terraform state
+      # 9. Locate state AFTER terraform init
+      # =========================================================
+      - name: Verify Terraform state after init
+        working-directory: ./infrastructure/terraform
+        run: |
+          echo "=========================================="
+          echo "TERRAFORM STATE AFTER INIT"
+          echo "=========================================="
+
+          echo ""
+          echo "Current directory:"
+          pwd
+
+          echo ""
+          echo "Terraform directory contents:"
+          ls -lah
+
+          echo ""
+          echo "Terraform state files:"
+          find . \
+            -name "terraform.tfstate" \
+            -type f \
+            -print
+
+          echo ""
+          echo "Terraform state backup files:"
+          find . \
+            -name "terraform.tfstate.backup" \
+            -type f \
+            -print
+
+          echo ""
+          echo "Terraform directory:"
+          ls -lah .terraform || true
+
+      # =========================================================
+      # 10. Display Terraform state using explicit state path
       # =========================================================
       - name: Display Terraform state
         working-directory: ./infrastructure/terraform
@@ -134,14 +181,40 @@ jobs:
           echo "TERRAFORM STATE"
           echo "=========================================="
 
+          STATE_FILE="$GITHUB_WORKSPACE/infrastructure/terraform/terraform.tfstate"
+
+          echo ""
+          echo "Expected state file:"
+          echo "$STATE_FILE"
+
+          if [ ! -f "$STATE_FILE" ]; then
+            echo ""
+            echo "ERROR: State file does not exist:"
+            echo "$STATE_FILE"
+
+            echo ""
+            echo "Searching for state files:"
+            find "$GITHUB_WORKSPACE/infrastructure" \
+              -name "terraform.tfstate" \
+              -type f \
+              -print
+
+            exit 1
+          fi
+
+          echo ""
+          echo "State file found:"
+          ls -lh "$STATE_FILE"
+
           echo ""
           echo "Resources currently in Terraform state:"
           echo "------------------------------------------"
 
-          terraform state list
+          terraform state list \
+            -state="$STATE_FILE"
 
       # =========================================================
-      # 10. Terraform Plan / Drift Check
+      # 11. Terraform Plan / Drift Check
       # =========================================================
       - name: Terraform Drift Check
         id: plan
@@ -157,6 +230,7 @@ jobs:
           terraform plan \
             -detailed-exitcode \
             -no-color \
+            -state="$GITHUB_WORKSPACE/infrastructure/terraform/terraform.tfstate" \
             > drift-plan.txt 2>&1
 
           TERRAFORM_EXIT_CODE=$?
@@ -171,10 +245,9 @@ jobs:
           echo ""
           echo "Terraform raw exit code: $TERRAFORM_EXIT_CODE"
 
-          # Terraform in this GitHub Actions environment may return
-          # 0 even when the plan contains changes.
-          #
-          # Therefore, inspect the Terraform Plan summary directly.
+          # =======================================================
+          # Detect actual Terraform changes from Plan summary
+          # =======================================================
 
           if grep -Eq \
             'Plan: [1-9][0-9]* to add, [0-9]+ to change, [0-9]+ to destroy\.|Plan: [0-9]+ to add, [1-9][0-9]* to change, [0-9]+ to destroy\.|Plan: [0-9]+ to add, [0-9]+ to change, [1-9][0-9]* to destroy\.' \
@@ -220,7 +293,7 @@ jobs:
           fi
 
       # =========================================================
-      # 11. Display detected drift
+      # 12. Display detected drift
       # =========================================================
       - name: Display detected drift
         if: steps.plan.outputs.drift_detected == 'true'
@@ -246,7 +319,17 @@ jobs:
           cat "$GITHUB_WORKSPACE/infrastructure/terraform/drift-plan.txt"
 
       # =========================================================
-      # 12. Prepare SES email
+      # 13. Upload Terraform drift plan
+      # =========================================================
+      - name: Upload Terraform drift plan
+        if: steps.plan.outputs.drift_detected == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-drift-plan
+          path: infrastructure/terraform/drift-plan.txt
+
+      # =========================================================
+      # 14. Prepare SES email
       # =========================================================
       - name: Prepare SES email
         if: steps.plan.outputs.drift_detected == 'true'
@@ -352,7 +435,7 @@ jobs:
           PY
 
       # =========================================================
-      # 13. Send SES drift notification
+      # 15. Send SES drift notification
       # =========================================================
       - name: Send SES drift notification
         if: steps.plan.outputs.drift_detected == 'true'
@@ -371,7 +454,7 @@ jobs:
           echo "=========================================="
 
       # =========================================================
-      # 14. No drift
+      # 16. No drift
       # =========================================================
       - name: No drift detected
         if: steps.plan.outputs.drift_detected == 'false' && steps.plan.outputs.exit_code == '0'
@@ -384,7 +467,7 @@ jobs:
           echo "Terraform configuration matches AWS infrastructure."
 
       # =========================================================
-      # 15. Terraform error
+      # 17. Terraform error
       # =========================================================
       - name: Terraform plan failed
         if: steps.plan.outputs.exit_code == '1'
