@@ -12,19 +12,20 @@ permissions:
 
 jobs:
   drift-detection:
+
     runs-on: ubuntu-latest
 
     steps:
 
-      # =========================================================
+      # ============================================================
       # 1. Checkout drift-notification repository
-      # =========================================================
+      # ============================================================
       - name: Checkout drift notification repository
         uses: actions/checkout@v4
 
-      # =========================================================
-      # 2. Checkout public drift-detection repository
-      # =========================================================
+      # ============================================================
+      # 2. Checkout PUBLIC drift-detection repository
+      # ============================================================
       - name: Checkout infrastructure repository
         uses: actions/checkout@v4
         with:
@@ -32,91 +33,101 @@ jobs:
           ref: main
           path: infrastructure
 
-      # =========================================================
-      # 3. Find Terraform configuration
-      # =========================================================
-      - name: Locate Terraform configuration
-        id: terraform-location
+      # ============================================================
+      # 3. Show exactly what was checked out
+      # ============================================================
+      - name: Inspect infrastructure repository
         shell: bash
         run: |
-          echo "========================================"
-          echo "Current directory"
-          echo "========================================"
+          echo "=================================================="
+          echo "CURRENT WORKING DIRECTORY"
+          echo "=================================================="
           pwd
 
           echo ""
-          echo "========================================"
-          echo "Infrastructure repository"
-          echo "========================================"
-          find infrastructure -maxdepth 3 -type f -print | sort
+          echo "=================================================="
+          echo "INFRASTRUCTURE REPOSITORY"
+          echo "=================================================="
+
+          find infrastructure -maxdepth 4 -type f -print | sort
 
           echo ""
-          echo "========================================"
-          echo "Searching for Terraform files"
-          echo "========================================"
+          echo "=================================================="
+          echo "TERRAFORM FILES"
+          echo "=================================================="
+
+          find infrastructure -type f -name "*.tf" -print | sort
+
+      # ============================================================
+      # 4. Locate Terraform configuration
+      # ============================================================
+      - name: Locate Terraform directory
+        id: terraform-location
+        shell: bash
+        run: |
+
+          echo "=================================================="
+          echo "SEARCHING FOR TERRAFORM CONFIGURATION"
+          echo "=================================================="
 
           TF_FILES=$(find infrastructure -type f -name "*.tf" -print)
 
           if [ -z "$TF_FILES" ]; then
+
             echo ""
-            echo "ERROR: No Terraform .tf files found."
+            echo "ERROR: No Terraform configuration files found."
             echo ""
-            echo "Repository contents:"
+
+            echo "Files that were checked out:"
             find infrastructure -type f -print | sort
+
+            echo ""
+            echo "Make sure the main branch of"
+            echo "abbysac/drift-detection"
+            echo "contains Terraform .tf files."
+
             exit 1
           fi
 
+          echo "Terraform files found:"
           echo "$TF_FILES"
 
           echo ""
-          echo "========================================"
-          echo "Determining Terraform directory"
-          echo "========================================"
+          echo "=================================================="
+          echo "DETERMINING TERRAFORM DIRECTORY"
+          echo "=================================================="
 
-          # Get directory containing the first Terraform file
-          FIRST_TF_FILE=$(echo "$TF_FILES" | head -n 1)
+          # Find the directory containing main.tf.
+          MAIN_TF=$(find infrastructure -type f -name "main.tf" -print | head -n 1)
 
-          TF_DIR=$(dirname "$FIRST_TF_FILE")
+          if [ -n "$MAIN_TF" ]; then
 
-          echo "First Terraform file:"
-          echo "$FIRST_TF_FILE"
+            TF_DIR=$(dirname "$MAIN_TF")
 
-          echo ""
-          echo "Terraform directory:"
+          else
+
+            # If there is no main.tf, use the directory
+            # containing the first .tf file.
+            FIRST_TF=$(echo "$TF_FILES" | head -n 1)
+
+            TF_DIR=$(dirname "$FIRST_TF")
+
+          fi
+
+          echo "Terraform configuration:"
           echo "$TF_DIR"
 
-          # Make the path relative to the GitHub workspace
-          TF_DIR="${TF_DIR#./}"
+          echo ""
+          echo "Terraform files in this directory:"
+          find "$TF_DIR" -maxdepth 1 -type f -name "*.tf" -print | sort
 
           echo ""
-          echo "Final Terraform working directory:"
-          echo "$TF_DIR"
 
           echo "terraform_dir=$TF_DIR" >> "$GITHUB_OUTPUT"
 
-      # =========================================================
-      # 4. Show Terraform directory
-      # =========================================================
-      - name: Verify Terraform directory
-        run: |
-          echo "Terraform working directory:"
-          echo "${{ steps.terraform-location.outputs.terraform_dir }}"
-
-          echo ""
-          echo "Contents:"
-          ls -la "${{ steps.terraform-location.outputs.terraform_dir }}"
-
-          echo ""
-          echo "Terraform files:"
-          find "${{ steps.terraform-location.outputs.terraform_dir }}" \
-            -maxdepth 1 \
-            -type f \
-            -name "*.tf" \
-            -print
-
-      # =========================================================
-      # 5. Configure AWS OIDC
-      # =========================================================
+      # ============================================================
+      # 5. Configure AWS using GitHub OIDC
+      # ============================================================
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -125,55 +136,72 @@ jobs:
           audience: sts.amazonaws.com
           output-env-credentials: true
 
-      # =========================================================
+      # ============================================================
       # 6. Verify AWS identity
-      # =========================================================
+      # ============================================================
       - name: Verify AWS identity
         run: |
-          echo "AWS identity:"
+
+          echo "=================================================="
+          echo "AWS IDENTITY"
+          echo "=================================================="
+
           aws sts get-caller-identity
 
-      # =========================================================
-      # 7. Setup Terraform
-      # =========================================================
+      # ============================================================
+      # 7. Install Terraform
+      # ============================================================
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      # =========================================================
+      # ============================================================
       # 8. Terraform Init
-      # =========================================================
+      # ============================================================
       - name: Terraform Init
-        working-directory: ${{ steps.terraform-location.outputs.terraform_dir }}
-        run: |
-          echo "Running Terraform Init in:"
-          pwd
-
-          terraform init -input=false
-
-      # =========================================================
-      # 9. Terraform Plan / Drift Detection
-      # =========================================================
-      - name: Terraform Plan
-        id: drift
         working-directory: ${{ steps.terraform-location.outputs.terraform_dir }}
         shell: bash
         run: |
-          set +e
 
-          echo "========================================"
-          echo "Terraform Working Directory"
-          echo "========================================"
+          echo "=================================================="
+          echo "TERRAFORM INIT"
+          echo "=================================================="
 
+          echo "Working directory:"
           pwd
 
           echo ""
           echo "Terraform configuration:"
+          ls -la
+
+          echo ""
+
+          terraform init -input=false
+
+      # ============================================================
+      # 9. Terraform Plan / Drift Detection
+      # ============================================================
+      - name: Terraform Drift Check
+        id: drift
+        working-directory: ${{ steps.terraform-location.outputs.terraform_dir }}
+        shell: bash
+        run: |
+
+          set +e
+
+          echo "=================================================="
+          echo "TERRAFORM DRIFT CHECK"
+          echo "=================================================="
+
+          echo "Working directory:"
+          pwd
+
+          echo ""
+
+          echo "Terraform configuration:"
           ls -la *.tf
 
           echo ""
-          echo "========================================"
-          echo "Terraform Plan"
-          echo "========================================"
+          echo "Running terraform plan..."
 
           terraform plan \
             -detailed-exitcode \
@@ -188,72 +216,110 @@ jobs:
           echo "exit_code=$PLAN_EXIT_CODE" >> "$GITHUB_OUTPUT"
 
           echo ""
-          echo "========================================"
-          echo "Terraform Plan Output"
-          echo "========================================"
+          echo "=================================================="
+          echo "TERRAFORM PLAN OUTPUT"
+          echo "=================================================="
 
           cat drift-plan.txt
 
           echo ""
-          echo "========================================"
+          echo "=================================================="
 
-          # -------------------------------------------------------
-          # Terraform error
-          # -------------------------------------------------------
-          if [ "$PLAN_EXIT_CODE" -eq 1 ]; then
-            echo "Terraform plan failed."
-            echo "drift_detected=false" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-
-          # -------------------------------------------------------
-          # Terraform detected changes
-          # -------------------------------------------------------
-          if [ "$PLAN_EXIT_CODE" -eq 2 ]; then
-            echo "Terraform drift detected."
-            echo "drift_detected=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # -------------------------------------------------------
+          # --------------------------------------------------------
+          # EXIT CODE 0
           # No changes
-          # -------------------------------------------------------
-          echo "No Terraform drift detected."
+          # --------------------------------------------------------
+
+          if [ "$PLAN_EXIT_CODE" -eq 0 ]; then
+
+            echo ""
+            echo "NO TERRAFORM DRIFT DETECTED."
+
+            echo "drift_detected=false" >> "$GITHUB_OUTPUT"
+
+            exit 0
+
+          fi
+
+          # --------------------------------------------------------
+          # EXIT CODE 1
+          # Terraform error
+          # --------------------------------------------------------
+
+          if [ "$PLAN_EXIT_CODE" -eq 1 ]; then
+
+            echo ""
+            echo "TERRAFORM PLAN FAILED."
+
+            echo "drift_detected=false" >> "$GITHUB_OUTPUT"
+
+            exit 1
+
+          fi
+
+          # --------------------------------------------------------
+          # EXIT CODE 2
+          # Terraform detected changes
+          # --------------------------------------------------------
+
+          if [ "$PLAN_EXIT_CODE" -eq 2 ]; then
+
+            echo ""
+            echo "=================================================="
+            echo "TERRAFORM DRIFT DETECTED"
+            echo "=================================================="
+
+            echo "drift_detected=true" >> "$GITHUB_OUTPUT"
+
+            exit 0
+
+          fi
+
+          # --------------------------------------------------------
+          # Unexpected exit code
+          # --------------------------------------------------------
+
+          echo ""
+          echo "Unexpected Terraform exit code: $PLAN_EXIT_CODE"
 
           echo "drift_detected=false" >> "$GITHUB_OUTPUT"
 
-      # =========================================================
-      # 10. Display drift
-      # =========================================================
+          exit 1
+
+      # ============================================================
+      # 10. Display detected drift
+      # ============================================================
       - name: Display detected drift
         if: steps.drift.outputs.drift_detected == 'true'
         working-directory: ${{ steps.terraform-location.outputs.terraform_dir }}
+        shell: bash
         run: |
-          echo "========================================"
+
+          echo "=================================================="
           echo "TERRAFORM DRIFT DETECTED"
-          echo "========================================"
+          echo "=================================================="
 
           echo ""
           echo "Changed resources:"
-          echo "----------------------------------------"
+          echo "--------------------------------------------------"
 
           grep -E '^  # .* will be ' drift-plan.txt || true
 
           echo ""
-          echo "Terraform Plan Summary:"
-          echo "----------------------------------------"
+          echo "Terraform summary:"
+          echo "--------------------------------------------------"
 
           grep -E '^Plan:' drift-plan.txt || true
 
           echo ""
-          echo "Full Terraform Plan:"
-          echo "----------------------------------------"
+          echo "Full Terraform plan:"
+          echo "--------------------------------------------------"
 
           cat drift-plan.txt
 
-      # =========================================================
-      # 11. Upload drift plan
-      # =========================================================
+      # ============================================================
+      # 11. Upload Terraform plan
+      # ============================================================
       - name: Upload Terraform drift plan
         if: always()
         uses: actions/upload-artifact@v4
@@ -262,28 +328,35 @@ jobs:
           path: ${{ steps.terraform-location.outputs.terraform_dir }}/drift-plan.txt
           if-no-files-found: warn
 
-      # =========================================================
+      # ============================================================
       # 12. Prepare SES email
-      # =========================================================
+      # ============================================================
       - name: Prepare SES email
         if: steps.drift.outputs.drift_detected == 'true'
         env:
           SES_FROM: "abbysac@gmail.com"
           SES_TO: "camleous@yahoo.com"
           TERRAFORM_DIR: ${{ steps.terraform-location.outputs.terraform_dir }}
+        shell: bash
         run: |
-          echo "========================================"
-          echo "Preparing SES email"
-          echo "========================================"
+
+          echo "=================================================="
+          echo "PREPARING SES EMAIL"
+          echo "=================================================="
 
           python3 <<'PY'
           import json
           import os
 
           terraform_dir = os.environ["TERRAFORM_DIR"]
-          drift_file = os.path.join(terraform_dir, "drift-plan.txt")
 
-          print(f"Reading drift plan: {drift_file}")
+          drift_file = os.path.join(
+              terraform_dir,
+              "drift-plan.txt"
+          )
+
+          print("Reading:")
+          print(drift_file)
 
           with open(drift_file, "r") as f:
               plan = f.read()
@@ -302,35 +375,53 @@ jobs:
                   "Body": {
                       "Text": {
                           "Data": (
-                              "Terraform has detected drift in your AWS infrastructure.\n\n"
+                              "Terraform has detected drift "
+                              "in your AWS infrastructure.\n\n"
                               "========================================\n"
                               "Terraform Drift Details\n"
                               "========================================\n\n"
                               + plan
                               + "\n\n"
-                              "The complete Terraform plan is available "
-                              "in the GitHub Actions artifact."
+                              "The complete Terraform plan is "
+                              "available as a GitHub Actions artifact."
                           )
                       }
                   }
               }
-          }
+          
 
-          with open("/tmp/ses-request.json", "w") as f:
-              json.dump(request, f, indent=2)
+          with open(
+              "/tmp/ses-request.json",
+              "w"
+          ) as f:
 
+              json.dump(
+                  request,
+                  f,
+                  indent=2
+              )
+
+          print("")
           print("SES request written successfully.")
+          print("")
+          print("Sender:")
+          print(os.environ["SES_FROM"])
+          print("")
+          print("Recipient:")
+          print(os.environ["SES_TO"])
           PY
 
-      # =========================================================
-      # 13. Send SES email
-      # =========================================================
+      # ============================================================
+      # 13. Send SES notification
+      # ============================================================
       - name: Send SES drift notification
         if: steps.drift.outputs.drift_detected == 'true'
+        shell: bash
         run: |
-          echo "========================================"
-          echo "Sending SES drift notification"
-          echo "========================================"
+
+          echo "=================================================="
+          echo "SENDING SES DRIFT NOTIFICATION"
+          echo "=================================================="
 
           echo ""
           echo "AWS identity:"
@@ -344,31 +435,35 @@ jobs:
             --cli-input-json file:///tmp/ses-request.json
 
           echo ""
-          echo "========================================"
+          echo "=================================================="
           echo "SES EMAIL SENT SUCCESSFULLY"
-          echo "========================================"
+          echo "=================================================="
 
-      # =========================================================
+      # ============================================================
       # 14. No drift
-      # =========================================================
+      # ============================================================
       - name: No drift detected
         if: steps.drift.outputs.drift_detected == 'false'
         run: |
-          echo "========================================"
-          echo "NO TERRAFORM DRIFT DETECTED"
-          echo "========================================"
 
+          echo "=================================================="
+          echo "NO TERRAFORM DRIFT DETECTED"
+          echo "=================================================="
+
+          echo ""
           echo "No SES notification was sent."
 
-      # =========================================================
-      # 15. Terraform failure
-      # =========================================================
+      # ============================================================
+      # 15. Terraform failure message
+      # ============================================================
       - name: Terraform plan failed
         if: failure() && steps.drift.outputs.exit_code == '1'
         run: |
-          echo "========================================"
-          echo "TERRAFORM PLAN FAILED"
-          echo "========================================"
 
-          echo "Check the Terraform Plan output above."
+          echo "=================================================="
+          echo "TERRAFORM PLAN FAILED"
+          echo "=================================================="
+
+          echo ""
+          echo "Review the Terraform Drift Check step above."
 
