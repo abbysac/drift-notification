@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: abbysac/drift-detection
-          ref: main
+          ref: master
           path: infrastructure
 
       # ============================================================
