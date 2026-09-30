@@ -154,19 +154,20 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
+    
       # ============================================================
-      # 8. Terraform Init
+      # Terraform Init
       # ============================================================
       - name: Terraform Init
         working-directory: ${{ steps.terraform-location.outputs.terraform_dir }}
         shell: bash
         run: |
+          set -e
 
           echo "=================================================="
           echo "TERRAFORM INIT"
           echo "=================================================="
 
-          echo "Working directory:"
           pwd
 
           echo ""
@@ -174,36 +175,86 @@ jobs:
           ls -la
 
           echo ""
+          echo "Terraform version:"
+          terraform version
 
-          terraform init -input=false
+          echo ""
+          echo "Initializing Terraform..."
+
+          terraform init -input=false -reconfigure
+
+          echo ""
+          echo "Terraform initialization completed."
 
       # ============================================================
-      # 9. Terraform Plan / Drift Detection
+      # Show Terraform State
+      # ============================================================
+      - name: Inspect Terraform State
+        working-directory: ${{ steps.terraform-location.outputs.terraform_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "TERRAFORM STATE"
+          echo "=================================================="
+
+          echo ""
+          echo "Terraform state list:"
+          terraform state list
+
+          echo ""
+          echo "Number of resources in state:"
+          terraform state list | wc -l
+
+      # ============================================================
+      # Refresh Terraform State
+      # ============================================================
+      - name: Refresh Terraform State
+        working-directory: ${{ steps.terraform-location.outputs.terraform_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "REFRESHING TERRAFORM STATE"
+          echo "=================================================="
+
+          terraform plan \
+            -refresh-only \
+            -no-color
+
+      # ============================================================
+      # Terraform Drift Check
       # ============================================================
       - name: Terraform Drift Check
         id: drift
         working-directory: ${{ steps.terraform-location.outputs.terraform_dir }}
         shell: bash
         run: |
-
           set +e
 
           echo "=================================================="
           echo "TERRAFORM DRIFT CHECK"
           echo "=================================================="
 
+          echo ""
           echo "Working directory:"
           pwd
 
           echo ""
-
-          echo "Terraform configuration:"
+          echo "Terraform files:"
           ls -la *.tf
 
           echo ""
-          echo "Running terraform plan..."
+          echo "Resources in Terraform state:"
+          terraform state list
+
+          echo ""
+          echo "Running Terraform plan..."
 
           terraform plan \
+            -refresh=true \
             -detailed-exitcode \
             -no-color \
             > drift-plan.txt 2>&1
@@ -225,70 +276,29 @@ jobs:
           echo ""
           echo "=================================================="
 
-          # --------------------------------------------------------
-          # EXIT CODE 0
-          # No changes
-          # --------------------------------------------------------
-
           if [ "$PLAN_EXIT_CODE" -eq 0 ]; then
-
-            echo ""
-            echo "NO TERRAFORM DRIFT DETECTED."
-
+            echo "Terraform reports NO changes."
             echo "drift_detected=false" >> "$GITHUB_OUTPUT"
-
             exit 0
-
           fi
-
-          # --------------------------------------------------------
-          # EXIT CODE 1
-          # Terraform error
-          # --------------------------------------------------------
 
           if [ "$PLAN_EXIT_CODE" -eq 1 ]; then
-
-            echo ""
-            echo "TERRAFORM PLAN FAILED."
-
+            echo "Terraform plan FAILED."
             echo "drift_detected=false" >> "$GITHUB_OUTPUT"
-
             exit 1
-
           fi
-
-          # --------------------------------------------------------
-          # EXIT CODE 2
-          # Terraform detected changes
-          # --------------------------------------------------------
 
           if [ "$PLAN_EXIT_CODE" -eq 2 ]; then
-
-            echo ""
-            echo "=================================================="
-            echo "TERRAFORM DRIFT DETECTED"
-            echo "=================================================="
-
+            echo "Terraform detected changes/drift."
             echo "drift_detected=true" >> "$GITHUB_OUTPUT"
-
             exit 0
-
           fi
 
-          # --------------------------------------------------------
-          # Unexpected exit code
-          # --------------------------------------------------------
-
-          echo ""
-          echo "Unexpected Terraform exit code: $PLAN_EXIT_CODE"
-
+          echo "Unexpected Terraform exit code."
           echo "drift_detected=false" >> "$GITHUB_OUTPUT"
-
           exit 1
 
-      # ============================================================
-      # 10. Display detected drift
-      # ============================================================
+
       - name: Display detected drift
         if: steps.drift.outputs.drift_detected == 'true'
         working-directory: ${{ steps.terraform-location.outputs.terraform_dir }}
@@ -466,4 +476,3 @@ jobs:
 
           echo ""
           echo "Review the Terraform Drift Check step above."
-
